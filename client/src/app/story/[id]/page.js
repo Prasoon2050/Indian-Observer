@@ -136,52 +136,20 @@ export default function StoryDetailPage() {
       <article className="story-detail__body">
         <h2>Observer Summary</h2>
         <p className="story-detail__summary">{story.summary}</p>
-        {story.content && (
-          <>
-            <h3>Full Analysis</h3>
-            <p>{story.content}</p>
-          </>
-        )}
 
-        {story.primaryLink && (
-          <p className="story-detail__primary-link">
-            Primary coverage:{' '}
-            <a href={story.primaryLink} target="_blank" rel="noreferrer">
-              Visit source
-            </a>
-          </p>
+        {story.content && (
+          <section className="story-detail__analysis">
+            <h3>In-depth Analysis</h3>
+            {story.content
+              .split(/\n{2,}/)
+              .map((block) => block.trim())
+              .filter(Boolean)
+              .map((block, index) => (
+                <p key={index}>{block}</p>
+              ))}
+          </section>
         )}
       </article>
-
-      {relatedArticles.length > 0 && (
-        <section className="story-detail__related">
-          <div className="observer-section-heading">
-            <p>RELATED COVERAGE</p>
-            <div>
-              <h2>Source Highlights</h2>
-              <small>Additional reporting linked to this Observer summary</small>
-            </div>
-          </div>
-
-          <div className="story-detail__related-grid">
-            {relatedArticles.map((article) => (
-              <article key={article.id} className="related-card">
-                <header>
-                  <span>{article.source}</span>
-                  {article.publishedAt && <time>{formatDate(article.publishedAt)}</time>}
-                </header>
-                <h3>{article.title}</h3>
-                <p>{article.snippet}</p>
-                {article.link && (
-                  <a href={article.link} target="_blank" rel="noreferrer" className="related-card__cta">
-                    Read article →
-                  </a>
-                )}
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
 
       <footer className="story-detail__footer">
         <Link href="/" className="btn secondary">
