@@ -19,6 +19,7 @@ export const getNewsById = (id) => api.get(`/news/${id}`);
 export const getTrendingNews = () => api.get('/trending');
 export const getTrendingStatus = () => api.get('/trending/status');
 export const refreshTrending = () => api.post('/trending/refresh');
+export const refreshCategoryFeeds = () => api.post('/trending/refresh-categories');
 export const getDrafts = () => api.get('/news/drafts');
 export const publishNews = (id) => api.patch(`/news/${id}/publish`);
 export const deleteNews = (id) => api.delete(`/news/${id}`);

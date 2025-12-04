@@ -1,6 +1,6 @@
 const News = require('../models/News');
 const SystemStatus = require('../models/SystemStatus');
-const { runTrendingIngestion } = require('../services/trendingService');
+const { runTrendingIngestion, refreshCategoryFeeds } = require('../services/trendingService');
 
 const forceRefreshTrending = async (req, res) => {
   try {
@@ -25,5 +25,14 @@ const getTrendingStatus = async (req, res) => {
   res.json(status);
 };
 
-module.exports = { forceRefreshTrending, listTrending, getTrendingStatus };
+const refreshCategoriesOnly = async (req, res) => {
+  try {
+    const items = await refreshCategoryFeeds();
+    res.json({ refreshed: items.length, items });
+  } catch (error) {
+    res.status(500).json({ message: 'Category refresh failed', error: error.message });
+  }
+};
+
+module.exports = { forceRefreshTrending, listTrending, getTrendingStatus, refreshCategoriesOnly };
 

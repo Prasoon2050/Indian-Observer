@@ -3,7 +3,14 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import useAuth from '@/hooks/useAuth';
-import { deleteNews, generateNews, getDrafts, publishNews, refreshTrending } from '@/lib/api';
+import {
+  deleteNews,
+  generateNews,
+  getDrafts,
+  publishNews,
+  refreshTrending,
+  refreshCategoryFeeds,
+} from '@/lib/api';
 import NewsCard from '@/components/NewsCard';
 
 const DashboardPage = () => {
@@ -42,6 +49,20 @@ const DashboardPage = () => {
       await loadDrafts();
     } catch (error) {
       alert(error.response?.data?.message || 'Refresh failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRefreshCategories = async () => {
+    setBusy(true);
+    setStatus('Refreshing section feeds...');
+    try {
+      const { data } = await refreshCategoryFeeds();
+      setStatus(`Refreshed ${data.refreshed} section articles`);
+      await loadDrafts();
+    } catch (error) {
+      alert(error.response?.data?.message || 'Section refresh failed');
     } finally {
       setBusy(false);
     }
@@ -108,6 +129,9 @@ const DashboardPage = () => {
           <button className="btn" disabled={busy} onClick={handleRefresh}>
             Fetch trending drafts
           </button>
+          <button className="btn" disabled={busy} onClick={handleRefreshCategories}>
+            Refresh sections
+          </button>
           <button className="btn secondary" onClick={logout}>
             Logout
           </button>
@@ -158,7 +182,7 @@ const DashboardPage = () => {
           </NewsCard>
         ))}
       </div>
-      {drafts.length === 0 && <p>No drafts yet. Click “Fetch trending drafts”.</p>}
+      {drafts.length === 0 && <p>No drafts yet. Click “Fetch trending drafts” or “Refresh sections”.</p>}
     </section>
   );
 };

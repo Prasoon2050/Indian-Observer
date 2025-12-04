@@ -341,23 +341,7 @@ export default function Home() {
     [contentPool]
   );
 
-  const renderSourceList = (story) => {
-    if (!story.sourceOptions?.length) return null;
-    return (
-      <ul className="observer-source-list">
-        {story.sourceOptions.slice(0, 3).map((option, idx) => (
-          <li key={`${story.topic}-${idx}`}>
-            <span>{option.source || 'Source'}</span>
-            {option.link && (
-              <a href={option.link} target="_blank" rel="noreferrer">
-                Read
-              </a>
-            )}
-          </li>
-        ))}
-      </ul>
-    );
-  };
+  const renderSourceList = () => null;
 
   return (
     <>

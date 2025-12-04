@@ -9,6 +9,23 @@ const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models
 const SUMMARY_MIN_WORDS = 100;
 const SUMMARY_MAX_WORDS = 140;
 
+// Gemini rate limiting: ensure we stay well under 10 calls per minute
+const GEMINI_MIN_INTERVAL_MS = 7000; // ~8–9 requests per minute
+let lastGeminiCallAt = 0;
+
+const delayIfNeededForGemini = async () => {
+  const now = Date.now();
+  const elapsed = now - lastGeminiCallAt;
+
+  if (elapsed < GEMINI_MIN_INTERVAL_MS) {
+    await new Promise((resolve) =>
+      setTimeout(resolve, GEMINI_MIN_INTERVAL_MS - elapsed)
+    );
+  }
+
+  lastGeminiCallAt = Date.now();
+};
+
 const CATEGORY_FEEDS = [
   {
     id: 'world',
@@ -213,6 +230,9 @@ const callGemini = async (prompt) => {
     throw new Error('GOOGLE_API_KEY missing');
   }
 
+  // Enforce global rate limit so we never exceed ~10 calls/min
+  await delayIfNeededForGemini();
+
   const { data } = await axios.post(
     `${GEMINI_ENDPOINT}/${GEMINI_MODEL}:generateContent?key=${process.env.GOOGLE_API_KEY}`,
     { contents: [{ parts: [{ text: prompt }] }] }
@@ -360,6 +380,29 @@ const ingestCategoryFeeds = async (issues) => {
   return categoryRecords;
 };
 
+const refreshCategoryFeeds = async () => {
+  const issues = [];
+  const categoryRecords = await ingestCategoryFeeds(issues);
+
+  const counters = { trending: 0, categories: categoryRecords.length };
+  const overallStatus =
+    issues.length === 0
+      ? 'success'
+      : counters.categories > 0
+      ? 'partial'
+      : 'failed';
+
+  await updateStatus({
+    lastRunFinishedAt: new Date(),
+    lastRunStatus: overallStatus,
+    summary: `Categories only: ${counters.categories}`,
+    issues: issues.slice(-8),
+    counters,
+  });
+
+  return categoryRecords;
+};
+
 const runTrendingIngestion = async () => {
   const startedAt = new Date();
   await updateStatus({
@@ -452,22 +495,24 @@ const scheduleAutoTrendingRefresh = () => {
     return cronJob;
   }
 
-  const expression = process.env.TRENDING_REFRESH_CRON || '*/30 * * * *';
+  // Default: refresh section feeds every 6 hours (~4 times per day)
+  const expression = process.env.TRENDING_REFRESH_CRON || '0 */6 * * *';
 
   cronJob = cron.schedule(
     expression,
     async () => {
       try {
-        await runTrendingIngestion();
+        await refreshCategoryFeeds();
       } catch (error) {
-        console.error('Trending refresh task failed:', error.message);
+        console.error('Section feed refresh task failed:', error.message);
       }
     },
     { scheduled: true }
   );
 
-  runTrendingIngestion().catch((error) => {
-    console.error('Initial trending pull failed:', error.message);
+  // Initial prime of category feeds
+  refreshCategoryFeeds().catch((error) => {
+    console.error('Initial section feed refresh failed:', error.message);
   });
 
   return cronJob;
@@ -524,5 +569,6 @@ module.exports = {
   scheduleAutoTrendingRefresh,
   generateNewsFromTopic,
   normalizeSummaryLength,
+  refreshCategoryFeeds,
 };
 
