@@ -24,7 +24,7 @@ const NewsCard = ({ item, children }) => {
       {storyHref && (
         <div style={{ marginTop: '0.75rem' }}>
           <Link href={storyHref} className="related-card__cta">
-            Read the Observer summary →
+            Read Observer summary
           </Link>
         </div>
       )}
