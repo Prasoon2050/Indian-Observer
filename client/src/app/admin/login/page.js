@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import Link from 'next/link';
 import useAuth from '@/hooks/useAuth';
 
 const AdminLoginPage = () => {
@@ -9,53 +10,78 @@ const AdminLoginPage = () => {
   const { login } = useAuth();
   const [form, setForm] = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
+    setError('');
     try {
       const user = await login(form);
       if (user.role !== 'admin') {
-        alert('Admin access required');
+        setError('Admin access required. This account does not have admin privileges.');
         return;
       }
       router.push('/admin/dashboard');
-    } catch (error) {
-      alert(error.response?.data?.message || 'Login failed');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Login failed. Please check your credentials.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <section className="form-card">
-      <h2>Admin login</h2>
-      <form onSubmit={handleSubmit}>
-        <div className="form-field">
-          <label htmlFor="email">Email</label>
-          <input
-            type="email"
-            id="email"
-            value={form.email}
-            onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
-            required
-          />
+    <div className="admin-login-container">
+      <section className="admin-login-card">
+        <div className="admin-login-header">
+          <h1>Admin Portal</h1>
+          <p className="admin-login-subtitle">The Indian Observer</p>
         </div>
-        <div className="form-field">
-          <label htmlFor="password">Password</label>
-          <input
-            type="password"
-            id="password"
-            value={form.password}
-            onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))}
-            required
-          />
+        
+        {error && (
+          <div className="admin-login-error">
+            <span>⚠️</span>
+            <p>{error}</p>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="admin-login-form">
+          <div className="form-field">
+            <label htmlFor="email">Email Address</label>
+            <input
+              type="email"
+              id="email"
+              value={form.email}
+              onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
+              placeholder="admin@example.com"
+              required
+              disabled={loading}
+            />
+          </div>
+          <div className="form-field">
+            <label htmlFor="password">Password</label>
+            <input
+              type="password"
+              id="password"
+              value={form.password}
+              onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))}
+              placeholder="Enter your password"
+              required
+              disabled={loading}
+            />
+          </div>
+          <button type="submit" className="btn admin-login-btn" disabled={loading}>
+            {loading ? 'Signing in...' : 'Sign In'}
+          </button>
+        </form>
+
+        <div className="admin-login-footer">
+          <Link href="/" className="admin-login-back-link">
+            ← Back to Home
+          </Link>
         </div>
-        <button className="btn" disabled={loading}>
-          {loading ? 'Authorizing...' : 'Login'}
-        </button>
-      </form>
-    </section>
+      </section>
+    </div>
   );
 };
 
