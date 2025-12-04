@@ -495,7 +495,7 @@ const scheduleAutoTrendingRefresh = () => {
     return cronJob;
   }
 
-  // Default: refresh section feeds every 6 hours (~4 times per day)
+  // Default: refresh both trending topics and category feeds every 6 hours (~4 times per day)
   // Cron format: minute hour day month day-of-week
   // '0 */6 * * *' = at minute 0 of every 6th hour (00:00, 06:00, 12:00, 18:00)
   const expression = process.env.TRENDING_REFRESH_CRON || '0 */6 * * *';
@@ -504,25 +504,25 @@ const scheduleAutoTrendingRefresh = () => {
     expression,
     async () => {
       try {
-        console.log(`[Cron] Starting scheduled category feed refresh at ${new Date().toISOString()}`);
-        const results = await refreshCategoryFeeds();
-        console.log(`[Cron] Category feed refresh completed: ${results.length} articles refreshed`);
+        console.log(`[Cron] Starting scheduled full ingestion refresh (trending + categories) at ${new Date().toISOString()}`);
+        const results = await runTrendingIngestion();
+        console.log(`[Cron] Full ingestion refresh completed: ${results.length} articles refreshed`);
       } catch (error) {
-        console.error('[Cron] Section feed refresh task failed:', error.message);
+        console.error('[Cron] Full ingestion refresh task failed:', error.message);
         console.error(error.stack);
       }
     },
     { scheduled: true }
   );
 
-  // Initial prime of category feeds (non-blocking)
+  // Initial prime of both trending topics and category feeds (non-blocking)
   (async () => {
     try {
-      console.log('[Cron] Running initial category feed refresh...');
-      const results = await refreshCategoryFeeds();
+      console.log('[Cron] Running initial full ingestion refresh (trending + categories)...');
+      const results = await runTrendingIngestion();
       console.log(`[Cron] Initial refresh completed: ${results.length} articles refreshed`);
     } catch (error) {
-      console.error('[Cron] Initial section feed refresh failed:', error.message);
+      console.error('[Cron] Initial full ingestion refresh failed:', error.message);
       console.error(error.stack);
     }
   })();
