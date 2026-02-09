@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { getNewsById, getPublishedNews } from '@/lib/api';
-import NewsCard from '@/components/NewsCard';
+const cleanTitle = (text = '') => {
+  return text.replace(/^Trending:\s*/i, '');
+};
 
 const formatDate = (value) => {
   if (!value) return 'Just now';
@@ -14,17 +16,6 @@ const formatDate = (value) => {
     return 'Just now';
   }
 };
-
-const buildRelatedArticles = (options = []) =>
-  options.map((option, index) => ({
-    id: `${option.link || option.title || 'source'}-${index}`,
-    title: option.title || option.source || 'Source coverage',
-    snippet: option.snippet || 'Source snippet unavailable.',
-    source: option.source || 'Unknown outlet',
-    link: option.link || option.news_url || null,
-    imageUrl: option.imageUrl || null,
-    publishedAt: option.publishedAt || null,
-  }));
 
 export default function StoryDetailPage() {
   const params = useParams();
@@ -41,194 +32,157 @@ export default function StoryDetailPage() {
     let cancelled = false;
 
     const fetchData = async () => {
-      setLoading(true);
-      setError('');
       try {
-        const [storyResponse, newsResponse] = await Promise.all([
+        const [storyRes, newsRes] = await Promise.all([
           getNewsById(storyId),
           getPublishedNews(),
         ]);
         if (!cancelled) {
-          setStory(storyResponse.data);
-          setAllNews(newsResponse.data || []);
+          setStory(storyRes.data);
+          setAllNews(newsRes.data || []);
         }
       } catch (err) {
         if (!cancelled) {
-          const message =
-            err.response?.data?.message ||
-            'We could not load this story. Please try again later.';
-          setError(message);
+          setError('Unable to load story.');
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     };
 
     fetchData();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => (cancelled = true);
   }, [storyId]);
 
-  const relatedArticles = useMemo(
-    () => buildRelatedArticles(story?.sourceOptions),
-    [story?.sourceOptions]
-  );
-
-  const briefs = useMemo(() => {
-    if (allNews.length === 0) return [];
-    return allNews.slice(0, 6).map((item) => ({
-      id: item._id,
-      category: item.category || item.tags?.[0] || 'Latest',
-      headline: item.title || item.topic,
-    }));
-  }, [allNews]);
-
   const relatedNews = useMemo(() => {
-    if (!story || allNews.length === 0) return [];
-    const storyCategory = story.category || story.tags?.[0] || '';
+    if (!story) return [];
+    const category = story.category || story.tags?.[0] || '';
     return allNews
-      .filter((item) => {
-        const itemCategory = item.category || item.tags?.[0] || '';
-        return (
-          item._id !== story._id &&
-          itemCategory.toLowerCase() === storyCategory.toLowerCase()
-        );
-      })
+      .filter(
+        (n) =>
+          n._id !== story._id &&
+          (n.category || n.tags?.[0] || '').toLowerCase() ===
+            category.toLowerCase()
+      )
       .slice(0, 4);
   }, [story, allNews]);
 
-  const heroImage = story?.imageUrl || story?.sourceOptions?.[0]?.imageUrl || null;
-
-  if (!storyId) {
-    return (
-      <section className="story-detail">
-        <p>Missing story identifier.</p>
-      </section>
-    );
-  }
+  const heroImage =
+    story?.imageUrl || story?.sourceOptions?.[0]?.imageUrl || null;
 
   if (loading) {
-    return (
-      <section className="story-detail">
-        <p>Loading story...</p>
-      </section>
-    );
+    return <p className="px-6 py-10">Loading story…</p>;
   }
 
-  if (error) {
+  if (error || !story) {
     return (
-      <section className="story-detail">
-        <p className="story-detail__error">{error}</p>
-        <button type="button" className="btn" onClick={() => router.push('/')}>
-          Go back home
+      <div className="px-6 py-10">
+        <p className="mb-4">{error || 'Story not found.'}</p>
+        <button
+          onClick={() => router.push('/')}
+          className="border px-4 py-2 text-sm"
+        >
+          Back to home
         </button>
-      </section>
-    );
-  }
-
-  if (!story) {
-    return (
-      <section className="story-detail">
-        <p>Story not found.</p>
-      </section>
+      </div>
     );
   }
 
   return (
-    <section className="story-detail">
-      <header className="story-detail__header">
-        <div>
-          <p className="story-detail__category">{story.category || 'Latest'}</p>
-          <h1>{story.title || story.topic}</h1>
-          <p className="story-detail__timestamp">{formatDate(story.publishedAt || story.generatedAt)}</p>
-        </div>
-        <div className="story-detail__tags">
-          {(story.tags || []).map((tag) => (
-            <span key={tag}>#{tag}</span>
-          ))}
-        </div>
+    <main className="max-w-7xl mx-auto px-6 py-6">
+      {/* ARTICLE HEADER */}
+      <header className="max-w-3xl mb-6">
+        <p className="text-xs uppercase text-gray-500">
+          {story.category || 'Latest'}
+        </p>
+        <h1 className="text-3xl font-semibold leading-snug mt-2">
+          {cleanTitle(story?.title || story?.topic)}
+        </h1>
+        <p className="text-sm text-gray-500 mt-2">
+          {formatDate(story.publishedAt || story.generatedAt)}
+        </p>
       </header>
 
+      {/* HERO IMAGE */}
       {heroImage && (
-        <div
-          className="story-detail__hero"
-          style={{ backgroundImage: `url(${heroImage})` }}
-          role="img"
-          aria-label={story.title || story.topic}
+        <img
+          src={heroImage}
+          alt={story.title || story.topic}
+          className="w-full max-h-[420px] object-cover mb-8"
         />
       )}
 
-      <div className="story-detail__layout">
-        <aside className="story-detail__briefs">
-          <p className="observer-section-title">TOP BRIEFS</p>
-          {briefs.length > 0 ? (
-            briefs.map((brief, idx) => {
-              const content = (
-                <>
-                  <small>{brief.category.toUpperCase()}</small>
-                  <p>{brief.headline}</p>
-                </>
-              );
-              return (
-                <div key={`${brief.headline}-${idx}`} className="observer-brief">
-                  {brief.id ? (
-                    <Link href={`/story/${brief.id}`} className="observer-brief__link">
-                      {content}
-                    </Link>
-                  ) : (
-                    content
-                  )}
-                </div>
-              );
-            })
-          ) : (
-            <p style={{ color: '#666', fontSize: '0.9rem' }}>No briefs available</p>
-          )}
-        </aside>
+      {/* CONTENT GRID */}
+      <section className="grid grid-cols-12 gap-8">
+        {/* MAIN STORY */}
+        <article className="col-span-8">
+          <h2 className="text-lg font-medium mb-3">Observer Summary</h2>
 
-        <article className="story-detail__body">
-          <h2>Observer Summary</h2>
-          <p className="story-detail__summary">{story.summary}</p>
+          <p className="text-lg leading-relaxed mb-6">
+            {story.summary}
+          </p>
 
           {story.content && (
-            <section className="story-detail__analysis">
-              <h3>In-depth Analysis</h3>
-              <div className="story-detail__analysis-content">
+            <>
+              <h3 className="text-lg font-medium mb-3">
+                In-depth Analysis
+              </h3>
+              <div className="space-y-4 text-base leading-relaxed">
                 {story.content
                   .split(/\n{2,}/)
-                  .map((block) => block.trim())
+                  .map((p) => p.trim())
                   .filter(Boolean)
-                  .map((block, index) => (
-                    <p key={index}>{block}</p>
+                  .map((p, i) => (
+                    <p key={i}>{p}</p>
                   ))}
               </div>
-            </section>
-          )}
-
-          {relatedNews.length > 0 && (
-            <section className="story-detail__related">
-              <h3>Related News</h3>
-              <div className="story-detail__related-grid">
-                {relatedNews.map((item) => (
-                  <NewsCard key={item._id} item={item} />
-                ))}
-              </div>
-            </section>
+            </>
           )}
         </article>
-      </div>
 
-      <footer className="story-detail__footer">
-        <Link href="/" className="btn secondary">
-          ← Back to home
+        {/* SIDEBAR */}
+        <aside className="col-span-4">
+          <h3 className="text-sm font-semibold mb-4 border-b pb-2">
+            Related News
+          </h3>
+
+          <div className="space-y-4">
+            {relatedNews.map((item) => (
+              <Link
+                key={item._id}
+                href={`/story/${item._id}`}
+                className="block hover:underline"
+              >
+                <p className="text-xs uppercase text-gray-500">
+                  {item.category || 'Latest'}
+                </p>
+                <p className="font-medium">
+                  {cleanTitle(item?.title || item?.topic)}
+                </p>
+              </Link>
+            ))}
+
+            {relatedNews.length === 0 && (
+              <p className="text-sm text-gray-500">
+                No related stories.
+              </p>
+            )}
+          </div>
+        </aside>
+      </section>
+
+      {/* FOOTER */}
+      <footer className="mt-10">
+        <Link
+          href="/"
+          className="text-sm text-gray-600 hover:underline"
+        >
+          ← Back to Home
         </Link>
       </footer>
-    </section>
+    </main>
   );
 }
+
 
 

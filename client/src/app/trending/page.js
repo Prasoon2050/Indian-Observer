@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import NewsCard from '@/components/NewsCard';
+import Link from 'next/link';
 import { getTrendingNews } from '@/lib/api';
 
 const TrendingPage = () => {
@@ -12,7 +12,7 @@ const TrendingPage = () => {
     const load = async () => {
       try {
         const { data } = await getTrendingNews();
-        setItems(data);
+        setItems(data || []);
       } finally {
         setLoading(false);
       }
@@ -21,24 +21,51 @@ const TrendingPage = () => {
   }, []);
 
   if (loading) {
-    return <p>Loading trending topics...</p>;
+    return <p className="px-6 py-10">Loading trending topics…</p>;
   }
 
   return (
-    <section>
-      <header>
-        <h1>Trending Topics (Auto Drafts)</h1>
-        <p>Fresh summaries generated every 30 minutes from Google and Gemini.</p>
+    <main className="max-w-7xl mx-auto px-6 py-6">
+      {/* PAGE HEADER */}
+      <header className="border-b pb-4 mb-6">
+        <h1 className="text-2xl font-semibold">Trending</h1>
+        <p className="text-sm text-gray-600 mt-1">
+          Auto-generated summaries refreshed every 30 minutes.
+        </p>
       </header>
-      <div className="news-grid">
+
+      {/* TRENDING FEED */}
+      <section className="divide-y">
         {items.map((item) => (
-          <NewsCard key={item._id} item={item} />
+          <article key={item._id} className="py-4">
+            <Link href={`/story/${item._id}`} className="block hover:underline">
+              <p className="text-xs uppercase text-gray-500">
+                {item.category || item.tags?.[0] || 'Latest'}
+              </p>
+
+              <h2 className="text-lg font-medium leading-snug mt-1">
+                {item.title || item.topic}
+              </h2>
+
+              {item.summary && (
+                <p className="text-sm text-gray-600 mt-1 line-clamp-2">
+                  {item.summary}
+                </p>
+              )}
+            </Link>
+          </article>
         ))}
-      </div>
-      {items.length === 0 && <p>No trending drafts available right now.</p>}
-    </section>
+      </section>
+
+      {items.length === 0 && (
+        <p className="text-sm text-gray-500 mt-6">
+          No trending drafts available right now.
+        </p>
+      )}
+    </main>
   );
 };
 
 export default TrendingPage;
+
 

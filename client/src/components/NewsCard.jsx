@@ -6,32 +6,53 @@ const NewsCard = ({ item, children }) => {
   const storyHref = item._id ? `/story/${item._id}` : null;
 
   return (
-    <article className="news-card">
-      <header className="news-card__header">
-        <div>
-          {storyHref ? (
-            <Link href={storyHref}>
-              <h3>{item.title || item.topic}</h3>
-            </Link>
-          ) : (
-            <h3>{item.title || item.topic}</h3>
-          )}
-          {item.category && <small className="news-card__category">{item.category}</small>}
-        </div>
-        {item.publishedAt && <time>{new Date(item.publishedAt).toLocaleString()}</time>}
-      </header>
-      <p className="news-card__summary">{item.summary}</p>
-      {storyHref && (
-        <div style={{ marginTop: '0.75rem' }}>
-          <Link href={storyHref} className="related-card__cta">
-            Read Observer summary
-          </Link>
-        </div>
+    <article className="py-4 border-b last:border-b-0">
+      {/* META */}
+      <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+        <span className="uppercase tracking-wider">
+          {item.category || item.tags?.[0] || 'Latest'}
+        </span>
+        {item.publishedAt && (
+          <time>{new Date(item.publishedAt).toLocaleDateString()}</time>
+        )}
+      </div>
+
+      {/* HEADLINE */}
+      {storyHref ? (
+        <Link href={storyHref} className="hover:underline">
+          <h3 className="text-lg font-medium leading-snug">
+            {item.title || item.topic}
+          </h3>
+        </Link>
+      ) : (
+        <h3 className="text-lg font-medium leading-snug">
+          {item.title || item.topic}
+        </h3>
       )}
-      {children && <div className="news-card__actions">{children}</div>}
+
+      {/* SNIPPET */}
+      {item.summary && (
+        <p className="text-sm text-gray-600 mt-1 line-clamp-2">
+          {item.summary}
+        </p>
+      )}
+
+      {/* CONTINUE READING */}
+      {storyHref && (
+        <Link
+          href={storyHref}
+          className="inline-block mt-2 text-sm font-medium text-blue-600 hover:underline"
+        >
+          Continue reading →
+        </Link>
+      )}
+
+      {children && <div className="mt-3">{children}</div>}
     </article>
   );
 };
 
 export default NewsCard;
+
+
 
