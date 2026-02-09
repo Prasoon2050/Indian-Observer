@@ -11,7 +11,6 @@ import {
   refreshTrending,
   refreshCategoryFeeds,
 } from '@/lib/api';
-import NewsCard from '@/components/NewsCard';
 
 const DashboardPage = () => {
   const { user, loading, logout } = useAuth();
@@ -30,162 +29,172 @@ const DashboardPage = () => {
 
   useEffect(() => {
     if (!loading) {
-      if (!user) {
-        router.push('/admin/login');
-      } else if (user.role !== 'admin') {
-        router.push('/');
-      } else {
-        loadDrafts();
-      }
+      if (!user) router.push('/admin/login');
+      else if (user.role !== 'admin') router.push('/');
+      else loadDrafts();
     }
-  }, [user, loading, router]);
+  }, [user, loading]);
 
-  const handleRefresh = async () => {
-    setBusy(true);
-    setStatus('Fetching trends...');
-    try {
-      const { data } = await refreshTrending();
-      setStatus(`Fetched ${data.refreshed} topics`);
-      await loadDrafts();
-    } catch (error) {
-      alert(error.response?.data?.message || 'Refresh failed');
-    } finally {
-      setBusy(false);
-    }
-  };
+  const handleGenerateNews = async (e) => {
+    e.preventDefault();
+    if (!generator.topic.trim()) return;
 
-  const handleRefreshCategories = async () => {
-    setBusy(true);
-    setStatus('Refreshing section feeds...');
-    try {
-      const { data } = await refreshCategoryFeeds();
-      setStatus(`Refreshed ${data.refreshed} section articles`);
-      await loadDrafts();
-    } catch (error) {
-      alert(error.response?.data?.message || 'Section refresh failed');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handlePublish = async (id) => {
-    setBusy(true);
-    try {
-      await publishNews(id);
-      await loadDrafts();
-    } catch (error) {
-      alert(error.response?.data?.message || 'Publish failed');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleDelete = async (id) => {
-    if (!confirm('Delete draft?')) return;
-    setBusy(true);
-    try {
-      await deleteNews(id);
-      await loadDrafts();
-    } catch (error) {
-      alert(error.response?.data?.message || 'Delete failed');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleGenerateNews = async (event) => {
-    event.preventDefault();
-    if (!generator.topic.trim()) {
-      setGenerationNote('Topic is required');
-      return;
-    }
     setGenerateBusy(true);
-    setGenerationNote('Contacting news API and Gemini…');
+    setGenerationNote('Contacting sources and Gemini…');
+
     try {
-      const { data } = await generateNews({
-        topic: generator.topic.trim(),
-        autoPublish: generator.autoPublish,
-      });
-      setGenerationNote(`${data.message}: ${data.article.title || data.article.topic}`);
-      setGenerator((prev) => ({ ...prev, topic: '' }));
+      const { data } = await generateNews(generator);
+      setGenerationNote(`Generated: ${data.article.title || data.article.topic}`);
+      setGenerator({ topic: '', autoPublish: false });
       await loadDrafts();
-    } catch (error) {
-      setGenerationNote(error.response?.data?.message || 'Generation failed');
+    } catch (err) {
+      setGenerationNote('Generation failed');
     } finally {
       setGenerateBusy(false);
     }
   };
 
   if (loading || !user || user.role !== 'admin') {
-    return <p>Validating admin session...</p>;
+    return <p className="px-6 py-10">Validating admin session…</p>;
   }
 
   return (
-    <section>
-      <header>
-        <h1>Admin studio</h1>
-        <p>Generate, review, and publish Gemini-backed stories.</p>
-        <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
-          <button className="btn" disabled={busy} onClick={handleRefresh}>
-            Fetch trending drafts
+    <main className="max-w-7xl mx-auto px-6 py-6">
+      {/* HEADER */}
+      <header className="border-b pb-4 mb-6">
+        <h1 className="text-2xl font-semibold">Admin Studio</h1>
+        <p className="text-sm text-gray-600 mt-1">
+          Generate, review, and publish newsroom content.
+        </p>
+
+        <div className="flex gap-3 mt-4">
+          <button
+            onClick={async () => {
+              setBusy(true);
+              setStatus('Fetching trends…');
+              await refreshTrending();
+              await loadDrafts();
+              setBusy(false);
+            }}
+            className="border px-3 py-1 text-sm hover:bg-gray-50"
+            disabled={busy}
+          >
+            Fetch trends
           </button>
-          <button className="btn" disabled={busy} onClick={handleRefreshCategories}>
+
+          <button
+            onClick={async () => {
+              setBusy(true);
+              setStatus('Refreshing sections…');
+              await refreshCategoryFeeds();
+              await loadDrafts();
+              setBusy(false);
+            }}
+            className="border px-3 py-1 text-sm hover:bg-gray-50"
+            disabled={busy}
+          >
             Refresh sections
           </button>
-          <button className="btn secondary" onClick={logout}>
+
+          <button
+            onClick={logout}
+            className="ml-auto border px-3 py-1 text-sm hover:bg-gray-50"
+          >
             Logout
           </button>
         </div>
-        {status && <small>{status}</small>}
+
+        {status && <p className="text-xs text-gray-500 mt-2">{status}</p>}
       </header>
 
-      <section className="form-card" style={{ marginTop: '1rem' }}>
-        <h3>Generate a story</h3>
-        <p>We will pull live coverage from Google News via SerpAPI and let Gemini summarize it.</p>
-        <form onSubmit={handleGenerateNews}>
-          <div className="form-field">
-            <label htmlFor="topic">Topic or keyword</label>
-            <input
-              id="topic"
-              value={generator.topic}
-              onChange={(e) => setGenerator((prev) => ({ ...prev, topic: e.target.value }))}
-              placeholder="e.g., Chandrayaan mission update"
-            />
-          </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}>
+      {/* GENERATOR */}
+      <section className="border-b pb-6 mb-6">
+        <h2 className="text-lg font-medium mb-2">Generate story</h2>
+
+        <form onSubmit={handleGenerateNews} className="flex gap-3 items-center">
+          <input
+            className="flex-1 border px-3 py-2 text-sm"
+            placeholder="Topic or keyword (e.g. RBI interest rates)"
+            value={generator.topic}
+            onChange={(e) =>
+              setGenerator((p) => ({ ...p, topic: e.target.value }))
+            }
+          />
+
+          <label className="text-xs flex items-center gap-1">
             <input
               type="checkbox"
               checked={generator.autoPublish}
-              onChange={(e) => setGenerator((prev) => ({ ...prev, autoPublish: e.target.checked }))}
+              onChange={(e) =>
+                setGenerator((p) => ({ ...p, autoPublish: e.target.checked }))
+              }
             />
-            Publish automatically to reader feed
+            Auto-publish
           </label>
-          <button className="btn" disabled={generateBusy}>
-            {generateBusy ? 'Generating…' : 'Generate story'}
+
+          <button
+            disabled={generateBusy}
+            className="border px-4 py-2 text-sm hover:bg-gray-50"
+          >
+            {generateBusy ? 'Generating…' : 'Generate'}
           </button>
         </form>
-        {generationNote && <small>{generationNote}</small>}
+
+        {generationNote && (
+          <p className="text-xs text-gray-500 mt-2">{generationNote}</p>
+        )}
       </section>
 
-      <h2 style={{ margin: '1.5rem 0 1rem' }}>Draft queue</h2>
-      <div className="news-grid">
-        {drafts.map((item) => (
-          <NewsCard key={item._id} item={item}>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button className="btn" disabled={busy} onClick={() => handlePublish(item._id)}>
-                Publish
-              </button>
-              <button className="btn secondary" disabled={busy} onClick={() => handleDelete(item._id)}>
-                Delete
-              </button>
+      {/* DRAFT QUEUE */}
+      <section>
+        <h2 className="text-lg font-medium mb-4">Draft queue</h2>
+
+        <div className="divide-y">
+          {drafts.map((item) => (
+            <div
+              key={item._id}
+              className="py-4 flex justify-between items-start"
+            >
+              <div>
+                <p className="text-xs uppercase text-gray-500">
+                  {item.category || 'General'}
+                </p>
+                <h3 className="font-medium">{item.title || item.topic}</h3>
+                <p className="text-sm text-gray-600 mt-1 line-clamp-2">
+                  {item.summary}
+                </p>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => publishNews(item._id).then(loadDrafts)}
+                  className="border px-3 py-1 text-sm hover:bg-gray-50"
+                  disabled={busy}
+                >
+                  Publish
+                </button>
+                <button
+                  onClick={() => deleteNews(item._id).then(loadDrafts)}
+                  className="border px-3 py-1 text-sm hover:bg-gray-50"
+                  disabled={busy}
+                >
+                  Delete
+                </button>
+              </div>
             </div>
-          </NewsCard>
-        ))}
-      </div>
-      {drafts.length === 0 && <p>No drafts yet. Click “Fetch trending drafts” or “Refresh sections”.</p>}
-    </section>
+          ))}
+        </div>
+
+        {drafts.length === 0 && (
+          <p className="text-sm text-gray-500 mt-4">
+            No drafts available.
+          </p>
+        )}
+      </section>
+    </main>
   );
 };
 
 export default DashboardPage;
+
 

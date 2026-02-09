@@ -8,7 +8,8 @@ const SystemStatus = require('../models/SystemStatus');
 // Updated based on actual available models from ListModels API
 // Using models that support generateContent method
 const GEMINI_MODELS = [
-  'gemini-2.5-flash',        // Latest stable flash model
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',        // Latest stable flash model
   'gemini-pro-latest',       // Latest pro model (backward compatible)
   'gemini-flash-latest',     // Latest flash model (backward compatible)
   'gemini-2.0-flash',        // Stable 2.0 flash
@@ -20,7 +21,7 @@ const SUMMARY_MAX_WORDS = 140;
 
 // Gemini rate limiting: ensure we stay well under 10 calls per minute
 // Increased to 8 seconds to be extra safe (7.5 calls/min max)
-const GEMINI_MIN_INTERVAL_MS = 8000; // ~7–8 requests per minute
+const GEMINI_MIN_INTERVAL_MS = 15000; // ~4 requests per minute (very safe for free tier)
 let lastGeminiCallAt = 0;
 let currentGeminiModelIndex = 0; // Track which model is currently working
 
@@ -89,40 +90,40 @@ const updateStatus = async (changes) => {
   }
 };
 
-const normalizeSummaryLength = (text, articleOptions = []) => {
-  const sanitize = (value) => (value || '').replace(/\s+/g, ' ').trim();
-  const wordsFrom = (value) => sanitize(value).split(' ').filter(Boolean);
 
-  const baseWords = wordsFrom(text);
-  const fallbackText = Array.isArray(articleOptions)
-    ? articleOptions.map((article) => article.snippet || article.title || '').join(' ')
-    : '';
-  const fallbackWords = wordsFrom(fallbackText);
 
-  let words = baseWords.length ? [...baseWords] : [...fallbackWords];
-  if (!words.length) {
-    return 'Summary unavailable.';
+const isFresh = (dateString) => {
+  if (!dateString) return false;
+
+  const now = Date.now();
+  const fourHoursMs = 24 * 60 * 60 * 1000;
+
+  // Handle relative time "X hours ago", "X mins ago"
+  // Example: "2 hours ago", "45 mins ago", "1 hour ago"
+  const relativeTime = dateString.toLowerCase();
+
+  if (relativeTime.includes('min') || relativeTime.includes('just now')) {
+    return true; // Minutes ago is always fresh (< 1 hour)
   }
 
-  if (words.length > SUMMARY_MAX_WORDS) {
-    words = words.slice(0, SUMMARY_MAX_WORDS);
-  } else if (words.length < SUMMARY_MIN_WORDS) {
-    const extender = fallbackWords.length ? fallbackWords : words;
-    let idx = 0;
-    while (words.length < SUMMARY_MIN_WORDS && extender.length) {
-      words.push(extender[idx % extender.length]);
-      idx += 1;
-      if (idx > SUMMARY_MAX_WORDS * 2) {
-        break;
-      }
-    }
-    if (words.length > SUMMARY_MAX_WORDS) {
-      words = words.slice(0, SUMMARY_MAX_WORDS);
+  if (relativeTime.includes('hour')) {
+    const parts = relativeTime.match(/(\d+)\s+hour/);
+    if (parts && parts[1]) {
+      const hours = parseInt(parts[1], 10);
+      return hours < 24;
     }
   }
 
-  return words.join(' ');
+  // Handle absolute dates / other formats
+  const parsed = Date.parse(dateString);
+  if (!isNaN(parsed)) {
+    return now - parsed < fourHoursMs;
+  }
+
+  // If we can't parse it reliably or it's "days ago", assume not fresh
+  return false;
 };
+
 
 const serpRequest = async (params) => {
   if (!process.env.SERPAPI_KEY) {
@@ -138,6 +139,13 @@ const serpRequest = async (params) => {
           return reject(new Error('Empty response from SerpAPI'));
         }
         if (json.error) {
+          // If error is a stringified JSON (common with some error responses), try to parse it
+          if (typeof json.error === 'string' && json.error.startsWith('{')) {
+            try {
+              const parsed = JSON.parse(json.error);
+              return reject(new Error(parsed.error || json.error));
+            } catch (e) { }
+          }
           return reject(new Error(json.error));
         }
         resolve(json);
@@ -154,17 +162,217 @@ const serpRequest = async (params) => {
 };
 
 const fetchTrendingTopics = async () => {
-  const response = await serpRequest({
-    engine: 'google_trends_trending_now',
-    geo: 'IN',
+  // Categories: 14 (People & Society), 3 (Business), 17 (Sports), 4 (Arts & Entertainment/Reference)
+  const categories = [14, 3, 17, 4];
+  const categoryNames = { 14: 'Politics', 3: 'Business', 17: 'Sports', 4: 'Entertainment' };
+  const allTopics = new Set();
+  const validItems = [];
+
+  console.log(`[Trending] Fetching topics for categories: ${categories.join(', ')}...`);
+
+  for (const catId of categories) {
+    try {
+      // Use "google_trends_trending_now" (Realtime)
+      // with specific parameters: geo="IN", hours="4", category_id=...
+      const response = await serpRequest({
+        engine: 'google_trends_trending_now',
+        geo: 'IN',
+        hours: '24', // Expanded to 24 hours
+        category_id: catId,
+      });
+
+      const searches = response.trending_searches || [];
+      const isPolitics = catId === 14;
+
+      const catTopics = searches
+        .map((item) => item?.query?.text || item?.query || item?.title)
+        .filter(Boolean)
+        .filter((topic) => {
+          // Relax constraint for Politics (allow single words), enforce >1 word for others
+          if (isPolitics) return true;
+          return topic.trim().split(/\s+/).length > 1;
+        });
+
+      console.log(`[Trending] Cat ${catId} (${categoryNames[catId]}) found: ${catTopics.length} topics`);
+
+      // Limit non-political categories to top 5 topics; allow all for Politics
+      const limitedTopics = isPolitics ? catTopics : catTopics.slice(0, 5);
+
+      limitedTopics.forEach(t => {
+        if (!allTopics.has(t.toLowerCase())) {
+          allTopics.add(t.toLowerCase());
+          validItems.push({ topic: t, category: categoryNames[catId] || 'General' });
+        }
+      });
+    } catch (error) {
+      console.warn(`[Trending] Failed to fetch category ${catId}: ${error.message || error}`);
+      if (error.message && error.message.includes('run out of searches')) {
+        console.error('[Trending] 🛑 SerpApi quota exceeded. Stopping further category fetches.');
+        break; // Stop trying other categories if quota is gone
+      }
+    }
+  }
+
+  console.log(`[Trending] Total unique topics found: ${validItems.length}`);
+  // Return all items (no hard limit of 20) to respect "don't limit" for Politics
+  return validItems;
+};
+
+// --------- Keyword lists (India-specific politics) ---------
+const tierAKeywords = [
+  // Institutions / governance
+  "parliament", "sansad", "lok sabha", "rajya sabha", "vidhan sabha", "vidhan parishad",
+  "legislative assembly", "legislative council", "union government", "central government",
+  "state government", "cabinet", "council of ministers", "minister", "ministry",
+  "pmo", "prime minister", "chief minister", "deputy cm", "governor", "lieutenant governor", "lg",
+  "speaker", "leader of opposition", "whip",
+
+  // Parliamentary process
+  "bill", "ordinance", "act", "amendment", "parliamentary committee", "standing committee",
+  "select committee", "question hour", "zero hour", "no-confidence motion", "confidence motion",
+  "floor test", "finance bill", "appropriation bill", "budget", "interim budget",
+
+  // Elections
+  "election commission", "eci", "chief election commissioner", "model code of conduct", "mcc",
+  "polling", "voter turnout", "constituency", "bypoll", "by-election", "delimitation",
+  "evm", "vvpat", "manifesto", "campaign", "rally", "nomination", "counting",
+
+  // Coalitions / blocs
+  "nda", "upa", "india bloc", "i.n.d.i.a", "coalition",
+
+  // Parties (common)
+  "bjp", "bharatiya janata party",
+  "inc", "congress", "indian national congress",
+  "aap", "aam aadmi party",
+  "cpi", "cpi(m)", "cpim", "left",
+  "tmc", "trinamool congress", "all india trinamool congress",
+  "sp", "samajwadi party",
+  "bsp", "bahujan samaj party",
+  "dmk", "aiadmk", "bjd", "ysrcp", "tdp", "jd(u)", "jdu", "rjd",
+  "shiv sena", "ncp", "jmm", "trs", "brs", "sad"
+];
+
+const tierBKeywords = [
+  // Courts / constitutional governance (often political news)
+  "constitution", "constitutional", "fundamental rights", "directive principles",
+  "supreme court", "sc", "high court", "pil", "bench", "verdict", "stay order",
+  "cji", "attorney general", "solicitor general", "article 370", "article 356",
+  "tenth schedule", "anti-defection", "disqualification", "impeachment",
+
+  // Administration and governance
+  "niti aayog", "raj bhavan", "rashtrapati bhavan", "north block", "south block",
+  "panchayat", "gram sabha", "municipal corporation", "municipality",
+
+  // Political conflict / events (lower precision)
+  "protest", "agitation", "dharna", "bandh", "hartal",
+  "political row", "opposition attack", "allegations", "controversy",
+  "governance", "policy", "reforms", "law and order", "curfew",
+  "corruption", "scam", "graft", "resignation", "cabinet reshuffle",
+
+  // Agencies commonly in political coverage (can be crime too)
+  "ed", "enforcement directorate", "cbi", "nia", "lokpal", "cvc"
+];
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalize(text) {
+  return (text || "")
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Build regex patterns (word-boundary aware for single tokens, phrase-aware for multiword)
+function buildPatterns(keywords) {
+  return keywords.map((kw) => {
+    const k = normalize(kw);
+    const escaped = escapeRegExp(k);
+
+    const isPhrase = /[\s.()]/.test(k);
+
+    const pattern = isPhrase
+      ? new RegExp(escaped, "gi")
+      : new RegExp(`\\b${escaped}\\b`, "gi");
+
+    return { kw: kw, re: pattern };
   });
+}
 
-  const searches = response.trending_searches || [];
-  const topics = searches
-    .map((item) => item?.title)
-    .filter(Boolean);
+const tierAPatterns = buildPatterns(tierAKeywords);
+const tierBPatterns = buildPatterns(tierBKeywords);
 
-  return topics.slice(0, 10);
+function countMatches(text, patterns) {
+  let count = 0;
+  for (const { re } of patterns) {
+    const found = text.match(re);
+    if (found) count += found.length;
+  }
+  return count;
+}
+
+/**
+ * Returns 1 if political, else 0
+ */
+function classifyPoliticsIndia01(inputText, options = {}) {
+  const {
+    minTierA = 1,
+    minTierB = 3,
+    requireBoth = false
+  } = options;
+
+  const text = normalize(inputText);
+
+  const tierAScore = countMatches(text, tierAPatterns);
+  const tierBScore = countMatches(text, tierBPatterns);
+
+  let isPolitical;
+  if (requireBoth) {
+    isPolitical = (tierAScore >= 1 && tierBScore >= 1) || tierAScore >= 2;
+  } else {
+    isPolitical = tierAScore >= minTierA || tierBScore >= minTierB;
+  }
+
+  return isPolitical ? 1 : 0;
+}
+
+const fetchSpecificPoliticalTopics = async () => {
+  console.log('[Political Fetch] Starting specialized political news search...');
+  try {
+    const response = await serpRequest({
+      engine: "google_news",
+      q: "India politics when:1d",
+      gl: "in",
+      hl: "en",
+      num: 100
+    });
+
+    const articles = response.news_results || [];
+    const titles = articles.map(r => r.title).filter(Boolean);
+    const uniqueTitles = Array.from(new Set(titles));
+
+    console.log(`[Political Fetch] Found ${uniqueTitles.length} unique titles from Google News.`);
+
+    const validPoliticalTopics = uniqueTitles.filter(title => {
+      const isPolitical = classifyPoliticsIndia01(title);
+      return isPolitical === 1;
+    });
+
+    console.log(`[Political Fetch] Classified ${validPoliticalTopics.length} titles as strictly political.`);
+
+    // Return as objects matching the existing structure
+    return validPoliticalTopics.map(topic => ({
+      topic: topic,
+      category: 'Politics'
+    }));
+
+  } catch (error) {
+    console.error(`[Political Fetch] Failed: ${error.message}`);
+    return [];
+  }
 };
 
 const fetchTopicInsights = async (topic) => {
@@ -189,6 +397,7 @@ const fetchTopicArticles = async (topic, limit = 6) => {
     q: topic,
     tbm: 'nws',
     num: limit,
+    tbs: 'qdr:h24,sbd:1', // Strict 24-hour window, sorted by date
   });
 
   const newsResults = response.news_results || [];
@@ -201,7 +410,13 @@ const fetchTopicArticles = async (topic, limit = 6) => {
       imageUrl: item.thumbnail || item.image_url || null,
       publishedAt: item.date || item.published_at || null,
     }))
-    .filter((article) => Boolean(article.link));
+    .filter((article) => {
+      const fresh = Boolean(article.link) && isFresh(article.publishedAt);
+      if (!fresh) {
+        // console.log(`[Filter] Dropped old article: "${article.title}" (${article.publishedAt})`);
+      }
+      return fresh;
+    });
 };
 
 const fetchCategoryArticles = async (feed, limit = 8) => {
@@ -215,6 +430,7 @@ const fetchCategoryArticles = async (feed, limit = 8) => {
   if (feed.topicToken) params.topic_token = feed.topicToken;
   if (feed.sectionToken) params.section_token = feed.sectionToken;
   params.num = limit;
+  params.tbs = 'qdr:h4,sbd:1'; // Strict 4-hour window, sorted by date
 
   const response = await serpRequest(params);
   const newsResults = response.news_results || response.articles_results || [];
@@ -233,7 +449,7 @@ const fetchCategoryArticles = async (feed, limit = 8) => {
         publishedAt: item.date || item.published_at || null,
       };
     })
-    .filter((article) => Boolean(article.link));
+    .filter((article) => Boolean(article.link) && isFresh(article.publishedAt));
 };
 
 const callGemini = async (prompt, retryCount = 0) => {
@@ -264,12 +480,12 @@ const callGemini = async (prompt, retryCount = 0) => {
     if (!responseText) {
       throw new Error('Empty response from Gemini API');
     }
-    
+
     // Success! Log which model worked
     if (retryCount === 0) {
       console.log(`[Gemini] Successfully using model: ${model}`);
     }
-    
+
     return responseText;
   } catch (error) {
     const statusCode = error.response?.status;
@@ -280,7 +496,7 @@ const callGemini = async (prompt, retryCount = 0) => {
     if (statusCode === 404) {
       console.warn(`[Gemini] Model ${model} returned 404: ${errorMessage}`);
       const nextIndex = (currentGeminiModelIndex + 1) % GEMINI_MODELS.length;
-      
+
       if (retryCount < GEMINI_MODELS.length - 1 && nextIndex !== currentGeminiModelIndex) {
         currentGeminiModelIndex = nextIndex;
         console.log(`[Gemini] Trying next model: ${GEMINI_MODELS[currentGeminiModelIndex]}`);
@@ -301,7 +517,7 @@ const callGemini = async (prompt, retryCount = 0) => {
       const waitTime = Math.min(60000, (retryCount + 1) * 10000); // Exponential backoff, max 60s
       console.warn(`[Gemini] Rate limited (429), waiting ${waitTime}ms before retry...`);
       await new Promise((resolve) => setTimeout(resolve, waitTime));
-      
+
       if (retryCount < 3) {
         return callGemini(prompt, retryCount + 1);
       } else {
@@ -329,22 +545,70 @@ const callGemini = async (prompt, retryCount = 0) => {
   }
 };
 
-const summarizeWithGemini = async (topic, trendData) => {
+const summarizeWithGemini = async (topic, trendData, articles = []) => {
   const trendSlice = JSON.stringify(trendData?.interest_over_time || []).slice(0, 6000);
 
+  // Create context from articles if available
+  const context = articles.length > 0
+    ? articles.slice(0, 3).map(a => `Source: ${a.source}\nSnippet: ${a.snippet}\nTitle: ${a.title}`).join('\n\n')
+    : 'No direct news context available.';
+
+  const title = articles.length > 0
+    ? articles.slice(0, 3).map(a => `Title: ${a.title}`).join('\n')
+    : 'No direct news context available.';
+
+  console.log('Context:', context);
+
+
   const prompt = [
-    'Create a crisp, factual news brief (aim for 100-140 words, roughly 10-12 lines) for the following trending Indian topic.',
-    `Topic: ${topic}`,
-    `Trend data: ${trendSlice}`,
-    'Highlight why it matters and avoid speculation.',
+    'SYSTEM INSTRUCTIONS:',
+    'You must behave as a professional news writing system.',
+    'PRIMARY OBJECTIVE:',
+    'Produce a publish-ready news article using the supplied context.',
+    'CONTENT RULES:',
+    '- Title length: ~10 words',
+    '- Summary length: ~500 words',
+    '- Language: formal, neutral, journalistic',
+    '- Style: factual reporting',
+    '- No dialogue, no meta commentary, no AI references',
+    '- No introductory phrases like "This article" or "The following"',
+    '- Do not repeat existing titles',
+    '- Use only verified facts present in the context',
+    'INPUT DATA:',
+    'Topic:',
+    topic,
+    'Previously Used Titles:',
+    title,
+    'Context News:',
+    context,
+    'FINAL OUTPUT STRUCTURE:',
+    'Title:',
+    '(Catchy headline)',
+    'Short Summary:',
+    '(concise overview, ~60 words)',
+    'Detailed Content:',
+    '(full news report, ~400 words)',
   ].join('\n');
+
+
 
   try {
     const responseText = await callGemini(prompt);
-    return responseText || 'Summary unavailable.';
+    console.log('Gemini response:', responseText);
+
+    // Parse the response
+    const titleMatch = responseText.match(/Title:\s*(.+?)(?=\n|Short Summary:|Detailed Content:|$)/i);
+    const shortMatch = responseText.match(/Short Summary:\s*([\s\S]+?)(?=\n|Detailed Content:|$)/i);
+    const contentMatch = responseText.match(/Detailed Content:\s*([\s\S]+)/i);
+
+    return {
+      title: titleMatch ? titleMatch[1].trim() : topic,
+      summary: shortMatch ? shortMatch[1].trim() : (responseText || 'Summary unavailable.'),
+      content: contentMatch ? contentMatch[1].trim() : (responseText || 'Content unavailable.')
+    };
   } catch (error) {
     console.error('Gemini trend summary failed', error.message);
-    return 'Summary unavailable.';
+    return { title: topic, summary: 'Summary unavailable.', content: 'Content unavailable.' };
   }
 };
 
@@ -370,7 +634,8 @@ Link: ${article.link || 'N/A'}`;
     'Use the sources below:',
     articlesText,
     'Create JSON with this structure: {"title":"","content":"","summary":"","category":"","tags":["",""]}.',
-    'Content should be 4-6 paragraphs (300-500 words). Summary must be 2 sentences. Provide a relevant category and 3 tags.',
+    'Title should be a catchy, professional headline, distinct from the source titles. Avoid clickbait.',
+    'Content should be a detailed article. Summary must be a concise overview. Provide a relevant category and 3 tags.',
   ].join('\n\n');
 
   try {
@@ -381,11 +646,12 @@ Link: ${article.link || 'N/A'}`;
     }
 
     const parsed = JSON.parse(jsonMatch[0]);
-    const normalizedSummary = normalizeSummaryLength(parsed.summary || parsed.content, articles);
+
+    console.log('Gemini response parsed:', JSON.stringify(parsed, null, 2));
     return {
       title: parsed.title || topic,
       content: parsed.content || parsed.summary || 'Content unavailable.',
-      summary: normalizedSummary,
+      summary: parsed.summary || parsed.content,
       category: parsed.category || 'General',
       tags: Array.isArray(parsed.tags) ? parsed.tags : [],
     };
@@ -398,7 +664,7 @@ Link: ${article.link || 'N/A'}`;
     return {
       title: `Trending: ${topic}`,
       content: articles.map((article, idx) => `${idx + 1}. ${article.title} - ${article.snippet || ''}`).join('\n'),
-      summary: normalizeSummaryLength(fallbackSummary, articles),
+      summary: fallbackSummary,
       category: 'General',
       tags: [topic.toLowerCase().replace(/\s+/g, '-'), 'trending'],
     };
@@ -426,25 +692,26 @@ const ingestCategoryFeeds = async (issues) => {
       // With 8-second delays between calls, this takes ~2 minutes to complete safely
       const articlesToProcess = articles.slice(0, 3);
       console.log(`[Category Feed] Processing ${articlesToProcess.length} articles for ${feed.category} category`);
-      
+
       for (const article of articlesToProcess) {
         try {
           console.log(`[Category Feed] Generating analysis for: "${article.title}" (${feed.category})`);
-          
+
           // Generate analysis specific to this individual article
           const articleData = await summarizeArticlesWithGemini(article.title, [article]);
-          
+
           // Use primaryLink as the primary deduplication key to ensure uniqueness
           // This prevents duplicate articles even if titles are similar
           const record = await News.findOneAndUpdate(
-            { 
+            {
               primaryLink: article.link // Primary key: match by article URL to avoid duplicates
             },
             {
               $set: {
                 topic: article.title, // Individual article headline
                 title: articleData.title || article.title, // Gemini-generated or original title
-                summary: articleData.summary || normalizeSummaryLength(article.snippet, [article]),
+                title: articleData.title || article.title, // Gemini-generated or original title
+                summary: articleData.summary || article.snippet,
                 content: articleData.content || article.snippet || 'Analysis unavailable.', // Individual in-depth analysis
                 category: feed.category,
                 tags: articleData.tags.length ? articleData.tags : feed.tags,
@@ -496,8 +763,8 @@ const refreshCategoryFeeds = async () => {
     issues.length === 0
       ? 'success'
       : counters.categories > 0
-      ? 'partial'
-      : 'failed';
+        ? 'partial'
+        : 'failed';
 
   await updateStatus({
     lastRunFinishedAt: new Date(),
@@ -519,33 +786,58 @@ const runTrendingIngestion = async () => {
     issues: [],
   });
 
-  const topics = await fetchTrendingTopics();
+  const [trendingItems, politicalItems] = await Promise.all([
+    fetchTrendingTopics(),
+    fetchSpecificPoliticalTopics()
+  ]);
+
+  // Merge and deduplicate items
+  const allItemsMap = new Map();
+
+  // Add standard trending items
+  trendingItems.forEach(item => allItemsMap.set(item.topic.toLowerCase(), item));
+
+  // Add/Overwrite with specialized political items
+  politicalItems.forEach(item => {
+    // If it already exists, ensuring it's marked as Politics might be good, 
+    // though the specialized fetch sets category to 'Politics' anyway.
+    if (!allItemsMap.has(item.topic.toLowerCase())) {
+      allItemsMap.set(item.topic.toLowerCase(), item);
+    }
+  });
+
+  const items = Array.from(allItemsMap.values());
   const results = [];
   const issues = [];
   let trendingCount = 0;
 
-  if (!topics.length) {
+  console.log(`[Trending] Found ${trendingItems.length} standard trending + ${politicalItems.length} specialized political items.`);
+  console.log(`[Trending] Total unique items to process: ${items.length}`);
+
+  if (!items.length) {
     console.warn('No trending topics returned from SerpAPI.');
   }
 
-  for (const topic of topics) {
+
+  for (const item of items) {
+    const { topic, category } = item;
     try {
       const insights = await fetchTopicInsights(topic).catch(() => null);
       const articles = await fetchTopicArticles(topic);
-      const summary = await summarizeWithGemini(topic, insights);
+      const summary = await summarizeWithGemini(topic, insights, articles);
       const availableSources = Array.from(
         new Set(articles.map((article) => article.source).filter(Boolean))
       );
       const firstArticle = articles[0] || {};
-      const normalizedSummary = normalizeSummaryLength(summary, articles);
 
       const record = await News.findOneAndUpdate(
         { topic },
         {
           $set: {
             topic,
-            title: topic,
-            summary: normalizedSummary,
+            title: summary.title || topic, // Use Gemini generated title
+            summary: summary.summary,
+            content: summary.content, // Use Gemini content as full content too
             interestOverTime: insights?.interest_over_time || [],
             isTrending: true,
             generatedAt: new Date(),
@@ -556,12 +848,14 @@ const runTrendingIngestion = async () => {
             primaryLink: firstArticle.link || null,
             externalUrl: firstArticle.link || null,
             imageUrl: firstArticle.imageUrl || null,
-            category: 'Trending',
-            tags: [topic.toLowerCase().replace(/\s+/g, '-')],
+            category: category || 'Trending',
+            tags: [topic.toLowerCase().replace(/\s+/g, '-'), category?.toLowerCase() || 'trending'],
             autoGenerated: true,
             fromNewsApi: true,
+            status: 'published', // Ensure news is published immediately
+            publishedAt: new Date(),
           },
-          $setOnInsert: { status: 'draft' },
+          $setOnInsert: {},
         },
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
@@ -576,26 +870,32 @@ const runTrendingIngestion = async () => {
     }
   }
 
+  /* 
+  // COMMENTED OUT as per user request to restrict flow to Trending Topics -> Articles -> Gemini -> DB
   const categoryRecords = await ingestCategoryFeeds(issues);
   results.push(...categoryRecords);
   const counters = { trending: trendingCount, categories: categoryRecords.length };
+  */
+
+  const counters = { trending: trendingCount, categories: 0 }; // Adjusted counters
+
   const overallStatus =
     issues.length === 0
       ? 'success'
-      : counters.trending + counters.categories > 0
-      ? 'partial'
-      : 'failed';
+      : counters.trending > 0 // Only checking trending count now
+        ? 'partial'
+        : 'failed';
 
   await updateStatus({
     lastRunFinishedAt: new Date(),
     lastRunStatus: overallStatus,
-    summary: `Trending: ${counters.trending}, Categories: ${counters.categories}`,
+    summary: `Trending: ${counters.trending}`,
     issues: issues.slice(-8),
     counters,
   });
 
-  console.log(`[MongoDB] 📊 Storage Summary: ${counters.trending} trending topics + ${counters.categories} category articles = ${results.length} total records stored`);
-  console.log(`[MongoDB] ✅ All content successfully stored in MongoDB`);
+  console.log(`[MongoDB] 📊 Storage Summary: ${counters.trending} trending topics stored`);
+  console.log(`[MongoDB] ✅ All filtered content successfully stored in MongoDB`);
 
   return results;
 };
@@ -606,10 +906,10 @@ const scheduleAutoTrendingRefresh = () => {
     return cronJob;
   }
 
-  // Default: refresh both trending and category feeds every 6 hours (~4 times per day)
+  // Default: refresh both trending and category feeds every 2 hours
   // Cron format: minute hour day month day-of-week
-  // '0 */6 * * *' = at minute 0 of every 6th hour (00:00, 06:00, 12:00, 18:00)
-  const expression = process.env.TRENDING_REFRESH_CRON || '0 */6 * * *';
+  // '0 */2 * * *' = at minute 0 of every 2nd hour
+  const expression = process.env.TRENDING_REFRESH_CRON || '0 */2 * * *';
 
   cronJob = cron.schedule(
     expression,
@@ -635,11 +935,11 @@ const scheduleAutoTrendingRefresh = () => {
       console.log('[Startup] Fetching trending topics and category feeds...');
       console.log('[Startup] All content will be stored in MongoDB.');
       console.log('[Startup] ========================================');
-      
+
       // Fetch both trending topics and category feeds
       // This ensures content is available immediately after server restart
       await runTrendingIngestion();
-      
+
       console.log('[Startup] ✅ Initial content fetch completed.');
       console.log('[Startup] All trending topics and category feeds stored in MongoDB.');
     } catch (error) {
@@ -674,7 +974,7 @@ const generateNewsFromTopic = async ({ topic, autoPublish = false, authorId = nu
   const record = await News.create({
     topic,
     title: articleData.title || topic,
-    summary: articleData.summary || normalizeSummaryLength(articles[0]?.snippet, articles),
+    summary: articleData.summary || articles[0]?.snippet,
     content: articleData.content,
     category: articleData.category,
     tags: articleData.tags,
@@ -701,7 +1001,6 @@ module.exports = {
   runTrendingIngestion,
   scheduleAutoTrendingRefresh,
   generateNewsFromTopic,
-  normalizeSummaryLength,
   refreshCategoryFeeds,
 };
 

@@ -58,7 +58,7 @@ app.use(
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
-app.use('/api', responseLogger);
+// app.use('/api', responseLogger);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

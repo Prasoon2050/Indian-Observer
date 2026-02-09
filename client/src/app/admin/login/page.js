@@ -16,74 +16,89 @@ const AdminLoginPage = () => {
     e.preventDefault();
     setLoading(true);
     setError('');
+
     try {
       const user = await login(form);
       if (user.role !== 'admin') {
-        setError('Admin access required. This account does not have admin privileges.');
+        setError('Admin access required.');
         return;
       }
       router.push('/admin/dashboard');
     } catch (err) {
-      setError(err.response?.data?.message || 'Login failed. Please check your credentials.');
+      setError(err.response?.data?.message || 'Invalid credentials.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="admin-login-container">
-      <section className="admin-login-card">
-        <div className="admin-login-header">
-          <h1>Admin Portal</h1>
-          <p className="admin-login-subtitle">The Indian Observer</p>
-        </div>
-        
+    <main className="min-h-[70vh] flex items-start justify-center px-4 pt-24">
+      <section className="w-full max-w-sm">
+        {/* HEADER */}
+        <header className="mb-6 border-b pb-4">
+          <h1 className="text-2xl font-semibold">Admin Sign In</h1>
+          <p className="text-sm text-gray-600 mt-1">
+            Indian Observer newsroom
+          </p>
+        </header>
+
+        {/* ERROR */}
         {error && (
-          <div className="admin-login-error">
-            <span>⚠️</span>
-            <p>{error}</p>
+          <div className="border border-red-200 bg-red-50 text-sm text-red-700 px-3 py-2 mb-4">
+            {error}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="admin-login-form">
-          <div className="form-field">
-            <label htmlFor="email">Email Address</label>
+        {/* FORM */}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm mb-1">Email</label>
             <input
               type="email"
-              id="email"
               value={form.email}
-              onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
-              placeholder="admin@example.com"
+              onChange={(e) =>
+                setForm((p) => ({ ...p, email: e.target.value }))
+              }
+              className="w-full border px-3 py-2 text-sm focus:outline-none"
               required
               disabled={loading}
             />
           </div>
-          <div className="form-field">
-            <label htmlFor="password">Password</label>
+
+          <div>
+            <label className="block text-sm mb-1">Password</label>
             <input
               type="password"
-              id="password"
               value={form.password}
-              onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))}
-              placeholder="Enter your password"
+              onChange={(e) =>
+                setForm((p) => ({ ...p, password: e.target.value }))
+              }
+              className="w-full border px-3 py-2 text-sm focus:outline-none"
               required
               disabled={loading}
             />
           </div>
-          <button type="submit" className="btn admin-login-btn" disabled={loading}>
-            {loading ? 'Signing in...' : 'Sign In'}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full border px-4 py-2 text-sm hover:bg-gray-50"
+          >
+            {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
 
-        <div className="admin-login-footer">
-          <Link href="/" className="admin-login-back-link">
+        {/* FOOTER */}
+        <footer className="mt-6 text-sm">
+          <Link href="/" className="text-gray-600 hover:underline">
             ← Back to Home
           </Link>
-        </div>
+        </footer>
       </section>
-    </div>
+    </main>
   );
 };
 
 export default AdminLoginPage;
+
 

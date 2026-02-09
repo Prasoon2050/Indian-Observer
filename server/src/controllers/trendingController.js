@@ -13,7 +13,18 @@ const forceRefreshTrending = async (req, res) => {
 };
 
 const listTrending = async (req, res) => {
-  const news = await News.find({ isTrending: true }).sort({ generatedAt: -1 });
+  const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000);
+  let news = await News.find({
+    isTrending: true,
+    generatedAt: { $gte: fourHoursAgo }
+  }).sort({ generatedAt: -1 });
+
+  if (!news.length) {
+    // Fallback: If no fresh news, return the latest available trending news
+    news = await News.find({ isTrending: true })
+      .sort({ generatedAt: -1 })
+      .limit(10);
+  }
   res.json(news);
 };
 

@@ -13,7 +13,12 @@ const getDraftNews = async (req, res) => {
   res.json(drafts);
 };
 
+const mongoose = require('mongoose');
+
 const getNewsDetail = async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ message: 'Invalid news ID' });
+  }
   const news = await News.findById(req.params.id).populate('comments.user', 'name role');
   if (!news) {
     return res.status(404).json({ message: 'News not found' });
