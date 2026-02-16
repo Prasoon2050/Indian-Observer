@@ -160,7 +160,7 @@ const CATEGORY_FEEDS = [
     id: 'tech',
     topic: 'Tech Radar',
     query: 'India technology startups',
-    category: 'Tech',
+    category: 'Technology',
     tags: ['tech', 'innovation'],
   },
   {
