@@ -3,13 +3,109 @@ const cron = require('node-cron');
 const { getJson } = require('serpapi');
 const News = require('../models/News');
 const SystemStatus = require('../models/SystemStatus');
+// ---------- IMAGE QUALITY HELPERS ----------
+const MIN_IMAGE_WIDTH = 800;
+const MIN_IMAGE_HEIGHT = 450;
+
+// Quick heuristic: thumbnails almost always include these patterns
+const isLikelyThumbnail = (url = '') =>
+  /serpapi|gstatic|encrypted-tbn|thumbnail|=w\d+|=h\d+/i.test(url);
+
+// Fetch image headers to estimate size (safe + fast)
+const isImageLargeEnough = async (url) => {
+  try {
+    const res = await axios.head(url, { timeout: 5000 });
+    const type = res.headers['content-type'] || '';
+    const length = parseInt(res.headers['content-length'] || '0', 10);
+
+    // Reject non-images or very small files (<40KB)
+    if (!type.startsWith('image/') || length < 40000) return false;
+    return true;
+  } catch {
+    return false;
+  }
+};
+// ---------- UNSPLASH FALLBACK ----------
+const fetchUnsplashImage = async (query) => {
+  if (!process.env.UNSPLASH_ACCESS_KEY) return null;
+
+  try {
+    const { data } = await axios.get(
+      'https://api.unsplash.com/search/photos',
+      {
+        params: {
+          query,
+          orientation: 'landscape',
+          per_page: 1,
+        },
+        headers: {
+          Authorization: `Client-ID ${process.env.UNSPLASH_ACCESS_KEY}`,
+        },
+      }
+    );
+
+    return data?.results?.[0]?.urls?.regular || null;
+  } catch {
+    return null;
+  }
+};
+
+// ---------- WIKIMEDIA FALLBACK ----------
+const fetchWikimediaImage = async (query) => {
+  try {
+    const { data } = await axios.get(
+      'https://commons.wikimedia.org/w/api.php',
+      {
+        params: {
+          action: 'query',
+          format: 'json',
+          prop: 'pageimages',
+          piprop: 'original',
+          pilimit: 1,
+          generator: 'search',
+          gsrsearch: query,
+          gsrnamespace: 6,
+        },
+      }
+    );
+
+    const pages = data?.query?.pages;
+    if (!pages) return null;
+
+    const page = Object.values(pages)[0];
+    return page?.original?.source || null;
+  } catch {
+    return null;
+  }
+};
+const resolveBestImage = async ({ imageUrl, topic, category }) => {
+  // 1️⃣ Reject empty or known thumbnails
+  if (!imageUrl || isLikelyThumbnail(imageUrl)) {
+    imageUrl = null;
+  }
+
+  // 2️⃣ Check if provided image is actually usable
+  if (imageUrl) {
+    const ok = await isImageLargeEnough(imageUrl);
+    if (ok) return imageUrl;
+  }
+
+  // 3️⃣ Wikimedia for politics / government
+  if (category === 'Politics' || category === 'World') {
+    const wiki = await fetchWikimediaImage(topic);
+    if (wiki) return wiki;
+  }
+
+  // 4️⃣ Unsplash fallback (safe default)
+  return await fetchUnsplashImage(topic);
+};
 
 // Try multiple model names in order of preference (fallback if one fails)
 // Updated based on actual available models from ListModels API
 // Using models that support generateContent method
 const GEMINI_MODELS = [
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',        // Latest stable flash model
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash',        // Latest stable flash model
   'gemini-pro-latest',       // Latest pro model (backward compatible)
   'gemini-flash-latest',     // Latest flash model (backward compatible)
   'gemini-2.0-flash',        // Stable 2.0 flash
@@ -388,68 +484,81 @@ const fetchTopicInsights = async (topic) => {
 };
 
 const fetchTopicArticles = async (topic, limit = 6) => {
-  if (!topic) {
-    throw new Error('Missing topic for fetchTopicArticles');
-  }
-
   const response = await serpRequest({
     engine: 'google',
     q: topic,
     tbm: 'nws',
     num: limit,
-    tbs: 'qdr:h24,sbd:1', // Strict 24-hour window, sorted by date
+    tbs: 'qdr:h24,sbd:1',
   });
 
-  const newsResults = response.news_results || [];
-  return newsResults
-    .map((item) => ({
+  const articles = (response.news_results || [])
+    .map(item => ({
       source: item.source || null,
       title: item.title || topic,
       snippet: item.snippet || '',
       link: item.link || item.news_url || null,
-      imageUrl: item.thumbnail || item.image_url || null,
+      rawImage:
+        item.original ||
+        item.image_url ||
+        item.thumbnail ||
+        null,
       publishedAt: item.date || item.published_at || null,
     }))
-    .filter((article) => {
-      const fresh = Boolean(article.link) && isFresh(article.publishedAt);
-      if (!fresh) {
-        // console.log(`[Filter] Dropped old article: "${article.title}" (${article.publishedAt})`);
-      }
-      return fresh;
+    .filter(a => Boolean(a.link) && isFresh(a.publishedAt));
+
+  //  Resolve best image PER article
+  for (const article of articles) {
+    article.imageUrl = await resolveBestImage({
+      imageUrl: article.rawImage,
+      topic: article.title,
+      category: null,
     });
+    delete article.rawImage;
+  }
+
+  return articles;
 };
 
 const fetchCategoryArticles = async (feed, limit = 8) => {
-  const params = {
+  const response = await serpRequest({
     engine: 'google_news',
     hl: feed.lang || 'en',
     gl: feed.country || 'in',
-  };
+    q: feed.query,
+    num: limit,
+    tbs: 'qdr:h4,sbd:1',
+  });
 
-  if (feed.query) params.q = feed.query;
-  if (feed.topicToken) params.topic_token = feed.topicToken;
-  if (feed.sectionToken) params.section_token = feed.sectionToken;
-  params.num = limit;
-  params.tbs = 'qdr:h4,sbd:1'; // Strict 4-hour window, sorted by date
-
-  const response = await serpRequest(params);
-  const newsResults = response.news_results || response.articles_results || [];
-  return newsResults
-    .map((item) => {
-      const source =
+  const articles = (response.news_results || [])
+    .map(item => ({
+      source:
         typeof item.source === 'string'
           ? item.source
-          : item.source?.name || item.publisher?.name || null;
-      return {
-        source,
-        title: item.title || item.heading || feed.topic,
-        snippet: item.snippet || item.summary || '',
-        link: item.link || item.url || item.news_url || null,
-        imageUrl: item.image?.src || item.image || item.thumbnail || null,
-        publishedAt: item.date || item.published_at || null,
-      };
-    })
-    .filter((article) => Boolean(article.link) && isFresh(article.publishedAt));
+          : item.source?.name || item.publisher?.name || null,
+      title: item.title || feed.topic,
+      snippet: item.snippet || item.summary || '',
+      link: item.link || item.url || null,
+      rawImage:
+        item.image?.original ||
+        item.image?.src ||
+        item.image_url ||
+        item.thumbnail ||
+        null,
+      publishedAt: item.date || item.published_at || null,
+    }))
+    .filter(a => Boolean(a.link) && isFresh(a.publishedAt));
+
+  for (const article of articles) {
+    article.imageUrl = await resolveBestImage({
+      imageUrl: article.rawImage,
+      topic: article.title,
+      category: feed.category,
+    });
+    delete article.rawImage;
+  }
+
+  return articles;
 };
 
 const callGemini = async (prompt, retryCount = 0) => {
