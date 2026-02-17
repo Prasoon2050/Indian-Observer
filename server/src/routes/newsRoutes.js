@@ -9,7 +9,18 @@ const {
   generateNews,
 } = require('../controllers/newsController');
 const { requireAuth } = require('../middleware/auth');
-
+// routes/admin.js or wherever your admin routes live
+router.post('/trigger-ingestion', async (req, res) => {
+  try {
+    // Run in background so the request doesn't time out
+    res.json({ message: 'Ingestion started' });
+    
+    await runTrendingIngestion();
+    await refreshCategoryFeeds();
+  } catch (err) {
+    console.error('Manual ingestion failed:', err.message);
+  }
+});
 router.get('/', getPublishedNews);
 router.get('/drafts', requireAuth('admin'), getDraftNews);
 router.post('/generate', requireAuth('admin'), generateNews);
